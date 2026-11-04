@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PINN Relative Depth | Physics-Informed Monocular Vision</title>
+  <link rel="stylesheet" href="/css/style.css?v=3.1">
+  <!-- Three.js for interactive 3D relative depth visualization -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="2"/>
+          <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <div class="brand-title-wrap">
+          <h1>PINN-Depth</h1>
+          <span class="research-badge">Physics-Informed Monocular Vision</span>
+        </div>
+        <p>Atmospheric Scattering Prior &bull; ResNet-18 FPN &bull; Zero-Shot Scale-Invariant Relative Depth</p>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="header-nav-links">
+        <a href="#model-code-walkthrough" class="header-link">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          Architecture &amp; Code
+        </a>
+      </div>
+      <div class="header-badges">
+        <span class="badge badge-outline" id="device-badge">Device: Initializing...</span>
+        <span class="badge badge-green">
+          <span class="badge-dot"></span>
+          Model Ready
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Layout -->
+  <main class="main-layout">
+
+    <!-- Primary Viewer Column -->
+    <section class="card viewer-card">
+      <div class="card-header">
+        <div class="tab-nav">
+          <button class="tab-btn active" id="tab-side" title="Side-by-Side Synchronized RGB and Relative Depth View">
+            <svg class="tag-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 4px; vertical-align: -1px;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
+            Side-by-Side View
+          </button>
+        </div>
+        <div class="toolbar-group">
+          <label class="tool-label" for="model-select">Model:</label>
+          <select id="model-select" class="select-input">
+            <option value="high_precision" selected>Physics-Guided SOTA (High-Precision)</option>
+            <option value="custom_pinn">ResNet-18 Custom PINN</option>
+          </select>
+
+          <label class="tool-label" for="colormap-select">Palette:</label>
+          <select id="colormap-select" class="select-input">
+            <option value="thermal_ironbow" selected>FLIR Thermal Ironbow (Clear Thermal Camera)</option>
+            <option value="thermal_rainbow">FLIR Thermal Rainbow (High-Contrast Thermal)</option>
+            <option value="distinct">Multi-Hue Objects (Yellow &rarr; Magenta &rarr; Cyan)</option>
+            <option value="das_icvgip">Das et al. ICVGIP 2012 (Yellow &rarr; Crimson &rarr; Black)</option>
+            <option value="turbo">Turbo Rainbow</option>
+            <option value="inferno">Inferno</option>
+            <option value="viridis">Viridis</option>
+            <option value="magma">Magma</option>
+            <option value="grayscale">Grayscale</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Viewer Body Container -->
+      <div class="viewer-body-container" id="viewer-body">
+
+        <!-- 1. Side-by-Side Dual View (Non-Overlapping, Default) -->
+        <div class="dual-viewer-grid" id="dual-grid">
+          <!-- Left: Uploaded Image -->
+          <div class="dual-panel" id="panel-rgb-side">
+            <div class="dual-panel-header">
+              <span class="panel-tag">
+                <svg class="tag-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Input Scene (RGB)
+              </span>
+              <span class="panel-hint">Click point to place Pin A / B</span>
+            </div>
+            <div class="dual-img-box" id="box-rgb">
+              <img id="img-rgb" src="/samples/garden.jpg" alt="Uploaded Scene">
+              <div class="point-pin point-a-pin" id="pin-a-rgb" style="display: none;">A</div>
+              <div class="point-pin point-b-pin" id="pin-b-rgb" style="display: none;">B</div>
+              <div class="crosshair-indicator" id="crosshair-rgb" style="display: none;"></div>
+            </div>
+
+            <!-- Symmetrical scene reference card -->
+            <div class="depth-scale-bar-card scene-info-card">
+              <div class="scale-bar-labels">
+                <span class="scale-near-badge">
+                  <span class="scale-dot dot-green"></span>
+                  <strong class="scale-role-text">Input Camera Frame</strong>
+                </span>
+                <span class="scale-mid-badge" id="scene-dim-badge">612 &times; 408 px</span>
+                <span class="scale-far-badge">
+                  <strong class="scale-role-text">Koschmieder Prior</strong>
+                  <span class="scale-dot dot-blue"></span>
+                </span>
+              </div>
+              <div class="rgb-guide-status">
+                <span class="status-pill"><span class="pill-dot green"></span> High-Pass Guided Filter</span>
+                <span class="status-pill"><span class="pill-dot blue"></span> Atmospheric Scattering Layer</span>
+              </div>
+              <div class="scale-numbers">
+                <span>Left: Calibrated RGB Sensor &bull; Right: Continuous Relative Depth Spectrum</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Right: Generated Depth Map -->
+          <div class="dual-panel" id="panel-depth-side">
+            <div class="dual-panel-header">
+              <span class="panel-tag">
+                <svg class="tag-svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
+                Predicted Relative Depth
+              </span>
+              <span class="panel-hint" id="active-colormap-label">FLIR Thermal Ironbow</span>
+            </div>
+            <div class="dual-img-box" id="box-depth">
+              <img id="img-depth" src="" alt="Predicted Relative Depth">
+              <div class="point-pin point-a-pin" id="pin-a-depth" style="display: none;">A</div>
+              <div class="point-pin point-b-pin" id="pin-b-depth" style="display: none;">B</div>
+              <div class="crosshair-indicator" id="crosshair-depth" style="display: none;"></div>
+            </div>
+
+            <!-- Interactive Thermal / Depth Spectrum Colorbar (Close vs Distant) -->
+            <div class="depth-scale-bar-card" id="depth-scale-bar-card">
+              <div class="scale-bar-labels">
+                <span class="scale-near-badge" id="scale-label-left">
+                  <span class="scale-dot dot-warm"></span>
+                  <strong class="scale-role-text" id="scale-role-left">Foreground (Near)</strong>
+                </span>
+                <span class="scale-mid-badge" id="scale-label-mid">Midground</span>
+                <span class="scale-far-badge" id="scale-label-right">
+                  <strong class="scale-role-text" id="scale-role-right">Background (Far / Sky)</strong>
+                  <span class="scale-dot dot-cool"></span>
+                </span>
+              </div>
+              <div class="scale-track-wrap" id="scale-track-wrap">
+                <div class="scale-track" id="depth-scale-gradient"></div>
+                <div class="scale-pointer" id="scale-pointer" style="display: none; left: 0%;">
+                  <div class="pointer-caret"></div>
+                  <div class="pointer-bubble" id="pointer-bubble">0.00</div>
+                </div>
+              </div>
+              <div class="scale-numbers">
+                <span id="scale-tick-0">0.00 (Near)</span>
+                <span>0.25</span>
+                <span>0.50</span>
+                <span>0.75</span>
+                <span id="scale-tick-1">1.00 (Far)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Overlapping Split Slider View (when user selects Split Slider tab) -->
+        <div class="viewer-viewport" id="split-viewport" style="display: none;">
+          <!-- Background Original RGB Image -->
+          <div class="viewer-pane" id="pane-rgb">
+            <img id="img-rgb-split" src="/samples/garden.jpg" alt="Original Scene">
+          </div>
+
+          <!-- Clipped Foreground Depth Map -->
+          <div class="split-clip" id="split-clip">
+            <div class="viewer-pane" id="pane-depth">
+              <img id="img-depth-split" src="" alt="Predicted Relative Depth">
+            </div>
+          </div>
+
+          <!-- Draggable Split Divider Handle -->
+          <div class="split-handle" id="split-handle" style="left: 50%;">
+            <div class="split-handle-circle">&harr;</div>
+          </div>
+
+          <!-- Labels -->
+          <div class="viewer-label label-left" id="label-left">Original Image</div>
+          <div class="viewer-label label-right" id="label-right">Relative Depth Map</div>
+
+          <!-- Interactive Pins for Point A and B -->
+          <div class="point-pin point-a-pin" id="pin-a-split" style="display: none;">A</div>
+          <div class="point-pin point-b-pin" id="pin-b-split" style="display: none;">B</div>
+        </div>
+
+        <!-- 3. Three.js 3D Container -->
+        <div id="threejs-container" style="display: none;"></div>
+
+        <!-- Synchronized Live Depth Readout Bar -->
+        <div class="probe-readout-bar" id="probe-readout">
+          <div class="probe-item">
+            <span class="probe-label">Coordinate:</span>
+            <strong id="probe-coord">-</strong>
+          </div>
+          <div class="probe-item">
+            <span class="probe-label">Relative Distance:</span>
+            <strong id="probe-val">-</strong>
+          </div>
+
+          <!-- Mini Inline Color Spectrum Legend -->
+          <div class="probe-spectrum-group" title="Live depth spectrum: Left=Closest, Right=Farthest">
+            <span class="spectrum-text near" id="mini-label-near">Near</span>
+            <div class="probe-mini-gradient-track" id="probe-mini-gradient-track">
+              <div class="probe-mini-gradient" id="probe-mini-gradient"></div>
+              <div class="mini-pointer" id="probe-mini-pointer" style="display: none; left: 0%;"></div>
+            </div>
+            <span class="spectrum-text far" id="mini-label-far">Far / Sky</span>
+          </div>
+
+          <div class="probe-instruction">
+            Hover either image to probe &bull; Click on objects to set <strong>Point A</strong> &amp; <strong>Point B</strong>
+          </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div class="loading-overlay" id="loading-overlay">
+          <div class="spinner"></div>
+          <div class="loading-text">Computing physics-informed depth estimation...</div>
+        </div>
+      </div>
+
+      <!-- Toolbar Bottom -->
+      <div class="viewer-toolbar">
+        <div class="toolbar-group">
+          <button class="btn btn-outline" id="btn-pin-mode">
+            <span>&bull;</span> Set Points to Compare (A / B)
+          </button>
+          <button class="btn btn-outline" id="btn-reset-pins">Clear Pins</button>
+        </div>
+
+        <div class="toolbar-group telemetry-group">
+          <span class="telemetry-chip">
+            <span class="telemetry-dot dot-cyan"></span>
+            FLIR MSX Relief (0.55)
+          </span>
+          <span class="telemetry-chip">
+            <span class="telemetry-dot dot-blue"></span>
+            Dynamic Tone Stretch (1.35&times;)
+          </span>
+        </div>
+      </div>
+
+      <!-- Outdoor Scene Gallery -->
+      <div style="padding: 1rem 1.25rem; border-top: 1px solid var(--border-light);">
+        <div style="font-size: 0.8rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 0.6rem;">
+          Sample Outdoor Scenes:
+        </div>
+        <div class="samples-bar" id="samples-container">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </section>
+
+    <!-- Sidebar Controls & Analysis -->
+    <aside class="sidebar">
+
+      <!-- Upload Card -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Upload Image</h2>
+        </div>
+        <div class="card-body">
+          <div class="dropzone" id="dropzone">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color: var(--text-muted); margin: 0 auto; display: block;">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="17 8 12 3 7 8"/>
+              <line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+            <p><strong>Click to upload</strong> or drag & drop</p>
+            <p style="font-size: 0.72rem; color: var(--text-subtle);">JPG, PNG up to 10 MB</p>
+            <input type="file" id="file-input" accept="image/*" style="display: none;">
+          </div>
+        </div>
+      </div>
+
+      <!-- Relative Object Ordering -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Relative Object Ordering</h2>
+        </div>
+        <div class="card-body">
+          <p style="font-size: 0.8rem; color: var(--text-secondary);">
+            Click two points in the scene to evaluate their relative distance from the camera:
+          </p>
+
+          <div class="comparison-result-box" id="comparison-result-box">
+            <div class="result-headline" id="comp-headline">Select Points A &amp; B</div>
+            <div class="result-summary" id="comp-summary">
+              Click anywhere on the image to place Point A, then click another object to place Point B.
+            </div>
+
+            <div class="metric-grid">
+              <div class="metric-item">
+                <div class="metric-name" style="color: var(--accent-blue);">Point A Depth</div>
+                <div class="metric-value" id="val-point-a">-</div>
+              </div>
+              <div class="metric-item">
+                <div class="metric-name" style="color: var(--accent-amber);">Point B Depth</div>
+                <div class="metric-value" id="val-point-b">-</div>
+              </div>
+            </div>
+
+            <div style="margin-top: 0.75rem; font-size: 0.75rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+              <span>Difference (&Delta;d): <strong id="val-delta" style="color: var(--text-primary);">-</strong></span>
+              <span>Confidence: <strong id="val-confidence" style="color: var(--text-primary);">-</strong></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Physics Parameters -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Atmospheric Physics</h2>
+        </div>
+        <div class="card-body">
+          <div class="formula-box">
+            I(x) = J(x) &bull; t(x) + A &bull; (1 &minus; t(x))
+          </div>
+          <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.75rem;">
+            Transmission constraint: t(x) = exp(&minus;&beta; &bull; d(x))
+          </p>
+
+          <div class="physics-param-row">
+            <span style="color: var(--text-secondary);">Atmospheric Light (A):</span>
+            <div class="color-swatch-box">
+              <div class="swatch" id="airlight-swatch" style="background-color: #f1f5f9;"></div>
+              <span style="font-family: var(--font-mono); font-size: 0.8rem;" id="airlight-val">[0.95, 0.95, 0.95]</span>
+            </div>
+          </div>
+
+          <div class="physics-param-row">
+            <span style="color: var(--text-secondary);">Koschmieder &beta;:</span>
+            <span style="font-family: var(--font-mono); font-weight: 600;" id="beta-val">1.25</span>
+          </div>
+
+          <div class="physics-param-row">
+            <span style="color: var(--text-secondary);">Das et al. ICVGIP &beta;:</span>
+            <span style="font-family: var(--font-mono); font-weight: 600; color: var(--accent-blue);" id="das-beta-val">0.45</span>
+          </div>
+
+          <div class="physics-param-row">
+            <span style="color: var(--text-secondary);">Predicted Depth Range:</span>
+            <span style="font-family: var(--font-mono); font-size: 0.8rem;" id="range-val">[0.00 &ndash; 1.00]</span>
+          </div>
+        </div>
+      </div>
+
+    </aside>
+  </main>
+
+  <!-- ========================================================================= -->
+  <!-- MODEL ARCHITECTURE, MATHEMATICS & PYTORCH CODE WALKTHROUGH SECTION -->
+  <!-- ========================================================================= -->
+  <section class="walkthrough-section" id="model-code-walkthrough">
+    <div class="walkthrough-container">
+      
+      <!-- Section Header -->
+      <div class="walkthrough-header">
+        <div class="section-meta-row">
+          <span class="section-tag">Methodology &amp; Architecture</span>
+          <span class="section-version">PyTorch 2.5 &bull; TensorRT Compatible</span>
+        </div>
+        <h2 class="walkthrough-title">Physics-Informed Optical Scattering &amp; Neural Architecture</h2>
+        <p class="walkthrough-desc">
+          Formal mathematical grounding, dual-headed network topology, Koschmieder atmospheric attenuation layer, 
+          and multi-spectral high-frequency edge relief implementations.
+        </p>
+      </div>
+
+      <!-- Pipeline Schematic Card -->
+      <div class="pipeline-diagram-card">
+        <div class="pipeline-header">
+          <div class="pipeline-title-group">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            <span class="pipeline-tag">Information Flow &amp; Tensor Dimensions</span>
+          </div>
+          <span class="pipeline-note">Multi-Scale Spatial Perception &rarr; Optical Scattering Constraints</span>
+        </div>
+        <div class="pipeline-flow">
+          <div class="pipe-node pipe-input">
+            <div class="node-badge">Input Sensor</div>
+            <div class="node-title">Scene Radiance I(x)</div>
+            <div class="node-shape">float32 [B, 3, H, W]</div>
+          </div>
+          <div class="pipe-arrow-connector">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </div>
+          <div class="pipe-node pipe-encoder">
+            <div class="node-badge">Feature Hierarchy</div>
+            <div class="node-title">ResNet-18 Encoder</div>
+            <div class="node-shape">C1..C5 Multi-Scale</div>
+          </div>
+          <div class="pipe-arrow-connector">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </div>
+          <div class="pipe-node pipe-decoder">
+            <div class="node-badge">Top-Down Fusion</div>
+            <div class="node-title">FPN + ResidualBlock</div>
+            <div class="node-shape">float32 [B, 32, H, W]</div>
+          </div>
+          <div class="pipe-arrow-connector">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </div>
+          <div class="pipe-node-split">
+            <div class="pipe-node pipe-head-depth">
+              <div class="node-badge">Depth Regressor</div>
+              <div class="node-title">Relative Depth d(x)</div>
+              <div class="node-shape">[B, 1, H, W] &in; [0, 1]</div>
+            </div>
+            <div class="pipe-node pipe-head-phys">
+              <div class="node-badge">Atmosphere Head</div>
+              <div class="node-title">Airlight A &amp; Coeff &beta;</div>
+              <div class="node-shape">A &in; [0.5, 1], &beta; &in; [0.2, 3]</div>
+            </div>
+          </div>
+          <div class="pipe-arrow-connector">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </div>
+          <div class="pipe-node pipe-physics">
+            <div class="node-badge">Physical Coupling</div>
+            <div class="node-title">Koschmieder Extinction</div>
+            <div class="node-shape">t(x) = exp(-&beta; &bull; d(x))</div>
+          </div>
+          <div class="pipe-arrow-connector">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </div>
+          <div class="pipe-node pipe-output">
+            <div class="node-badge">Detail Synthesis</div>
+            <div class="node-title">FLIR MSX Relief</div>
+            <div class="node-shape">High-Pass Filtered Depth</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Theoretical & Empirical Foundations Grid -->
+      <div class="defense-grid">
+        <div class="defense-card">
+          <div class="defense-head">
+            <span class="defense-num">01</span>
+            <div class="defense-title">Scale-Invariant Ordinal Formulation</div>
+          </div>
+          <p class="defense-text">
+            Monocular imagery lacks parallax disparity, rendering absolute metric depth in meters mathematically ill-posed without calibrated camera intrinsics. Continuous relative ordinal ordering (d<sub>A</sub> &lt; d<sub>B</sub>) is fundamentally scale- and shift-invariant, generalizing zero-shot across diverse cameras and lens optics.
+          </p>
+        </div>
+        <div class="defense-card">
+          <div class="defense-head">
+            <span class="defense-num">02</span>
+            <div class="defense-title">Koschmieder Optical Scattering Prior</div>
+          </div>
+          <p class="defense-text">
+            Standard visual CNNs treat scenes as unconstrained RGB textures. The PINN formulation couples visual representations with Koschmieder's physical extinction law (I = J &bull; t + A(1 &minus; t)), penalizing non-physical depth predictions and ensuring monotonic distance ordering in hazy landscapes.
+          </p>
+        </div>
+        <div class="defense-card">
+          <div class="defense-head">
+            <span class="defense-num">03</span>
+            <div class="defense-title">Multi-Spectral Dynamic Relief (MSX)</div>
+          </div>
+          <p class="defense-text">
+            Direct colormapping of continuous depth fields tends to blur adjacent foreground objects into a singular visual cluster. MSX unsharp-masking extracts high-frequency RGB luminance gradients (&nabla;I<sub>highpass</sub>) to modulate the thermal palette, preserving distinct object boundaries (e.g., foliage, vehicles, structures).
+          </p>
+        </div>
+        <div class="defense-card">
+          <div class="defense-head">
+            <span class="defense-num">04</span>
+            <div class="defense-title">Real-Time Latency &amp; Efficiency</div>
+          </div>
+          <p class="defense-text">
+            Built upon a lightweight ResNet-18 backbone with a 4-stage residual FPN decoder (~12.4M parameters). Operates with sub-25ms inference latency (&gt;40 FPS on standard RTX GPUs), ensuring feasibility for embedded robotics, autonomous drones, and low-power edge vision.
+          </p>
+        </div>
+      </div>
+
+      <!-- Code Tabs Navigation -->
+      <div class="code-tabs-nav" id="code-tabs-nav">
+        <button class="code-tab-btn active" data-tab="tab-pinn-net">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>pinn_net.py</span>
+          <span class="tab-sub">Dual-Head Architecture</span>
+        </button>
+        <button class="code-tab-btn" data-tab="tab-decoder">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+          <span>decoder.py</span>
+          <span class="tab-sub">FPN &amp; Residual Blocks</span>
+        </button>
+        <button class="code-tab-btn" data-tab="tab-losses">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49"/></svg>
+          <span>physics_losses.py</span>
+          <span class="tab-sub">Multi-Task Objectives</span>
+        </button>
+        <button class="code-tab-btn" data-tab="tab-msx">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+          <span>das_physics.py</span>
+          <span class="tab-sub">MSX Detail &amp; Contrast</span>
+        </button>
+      </div>
+
+      <!-- Tab Content Area -->
+      <div class="code-tab-content-wrap">
+
+        <!-- TAB 1: PINNDepthNet -->
+        <div class="code-tab-panel active" id="tab-pinn-net">
+          <div class="panel-explainer">
+            <div class="explainer-header">
+              <h3>PINNDepthNet Architecture: Dual-Head Physics Network</h3>
+            </div>
+            <p>
+              The core neural network couples a multi-scale ResNet-18 visual feature extractor with two specialized heads:
+              <strong>(1) Relative Depth Head</strong> producing continuous depth normalized strictly to [0.0, 1.0], and 
+              <strong>(2) Atmospheric Physics Head</strong> predicting global airlight vector <code>A</code> and extinction coefficient <code>&beta;</code>. 
+              The <strong>DifferentiableAtmosphericLayer</strong> couples both outputs via Koschmieder's physical law.
+            </p>
+            <div class="math-callout">
+              <span class="math-label">Physical Transmission Law:</span>
+              <code>t(x) = exp(&minus;&beta; &bull; d(x)) &emsp;&rArr;&emsp; J(x) = (I(x) &minus; A) / max(t(x), &epsilon;) + A</code>
+            </div>
+          </div>
+
+          <div class="code-editor-box">
+            <div class="editor-titlebar">
+              <div class="editor-file-info">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <span class="editor-filename">pinn_depth / models / pinn_net.py</span>
+              </div>
+              <div class="editor-actions">
+                <span class="editor-lang-badge">PyTorch 2.5</span>
+                <button class="copy-code-btn" data-target="code-pinn-net">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <span>Copy Code</span>
+                </button>
+              </div>
+            </div>
+            <pre class="code-pre"><code id="code-pinn-net"><span class="c1"># =========================================================================</span>
+<span class="c1"># Physics-Informed Neural Network (PINN) for Relative Depth Estimation</span>
+<span class="c1"># =========================================================================</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torch.nn</span> <span class="kn">as</span> <span class="nn">nn</span>
+<span class="kn">import</span> <span class="nn">torch.nn.functional</span> <span class="kn">as</span> <span class="nn">F</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">Dict</span><span class="p">,</span> <span class="n">Tuple</span>
+
+<span class="kn">from</span> <span class="nn">.encoder</span> <span class="kn">import</span> <span class="n">ResNetEncoder</span>
+<span class="kn">from</span> <span class="nn">.decoder</span> <span class="kn">import</span> <span class="n">FeaturePyramidDecoder</span>
+
+
+<span class="k">class</span> <span class="nc">RelativeDepthHead</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""</span>
+<span class="sd">    Continuous Relative Depth Prediction Head.</span>
+<span class="sd">    Maps decoded features [B, 32, H, W] to relative depth [B, 1, H, W] in [0, 1].</span>
+<span class="sd">    - d(x) -> 0.0: Nearest foreground object</span>
+<span class="sd">    - d(x) -> 1.0: Farthest background object / sky horizon</span>
+<span class="sd">    """</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">32</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">in_channels</span><span class="p">,</span> <span class="mi">16</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">act</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="mi">16</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sigmoid</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sigmoid</span><span class="p">()</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv2</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">act</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv1</span><span class="p">(</span><span class="n">x</span><span class="p">))))</span>
+
+
+<span class="k">class</span> <span class="nc">AtmosphericPhysicsHead</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""</span>
+<span class="sd">    Estimates global airlight vector A in [0.5, 1.0]^3 and attenuation beta in [0.2, 3.0]</span>
+<span class="sd">    from top semantic feature C5 [B, 512, H/32, W/32].</span>
+<span class="sd">    """</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">512</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">pool</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">AdaptiveAvgPool2d</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fc</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">in_channels</span><span class="p">,</span> <span class="mi">64</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">4</span><span class="p">),</span>  <span class="c1"># [A_r, A_g, A_b, beta]</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">c5</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tuple</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">feat</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">pool</span><span class="p">(</span><span class="n">c5</span><span class="p">)</span><span class="o">.</span><span class="n">flatten</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+        <span class="n">params</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fc</span><span class="p">(</span><span class="n">feat</span><span class="p">)</span>
+        <span class="n">airlight</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">+</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">params</span><span class="p">[:,</span> <span class="p">:</span><span class="mi">3</span><span class="p">])</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="n">beta</span> <span class="o">=</span> <span class="mf">0.2</span> <span class="o">+</span> <span class="mf">2.8</span> <span class="o">*</span> <span class="n">torch</span><span class="o">.</span><span class="n">sigmoid</span><span class="p">(</span><span class="n">params</span><span class="p">[:,</span> <span class="mi">3</span><span class="p">:])</span><span class="o">.</span><span class="n">view</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">airlight</span><span class="p">,</span> <span class="n">beta</span>
+
+
+<span class="k">class</span> <span class="nc">PINNDepthNet</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""Unified Physics-Informed Relative Monocular Depth Network."""</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">backbone</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"resnet18"</span><span class="p">,</span> <span class="n">pretrained</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span> <span class="o">=</span> <span class="n">ResNetEncoder</span><span class="p">(</span><span class="n">backbone</span><span class="o">=</span><span class="n">backbone</span><span class="p">,</span> <span class="n">pretrained</span><span class="o">=</span><span class="n">pretrained</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span> <span class="o">=</span> <span class="n">FeaturePyramidDecoder</span><span class="p">(</span><span class="n">encoder_channels</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="o">.</span><span class="n">channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">depth_head</span> <span class="o">=</span> <span class="n">RelativeDepthHead</span><span class="p">(</span><span class="n">in_channels</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">out_channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">physics_head</span> <span class="o">=</span> <span class="n">AtmosphericPhysicsHead</span><span class="p">(</span><span class="n">in_channels</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="o">.</span><span class="n">channels</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+        <span class="n">features</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encoder</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>                             <span class="c1"># [C1, C2, C3, C4, C5]</span>
+        <span class="n">decoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">(</span><span class="n">features</span><span class="p">,</span> <span class="n">target_size</span><span class="o">=</span><span class="n">x</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:])</span> <span class="c1"># [B, 32, H, W]</span>
+        <span class="n">depth</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">depth_head</span><span class="p">(</span><span class="n">decoded</span><span class="p">)</span>                        <span class="c1"># [B, 1, H, W] in [0, 1]</span>
+        <span class="n">airlight</span><span class="p">,</span> <span class="n">beta</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">physics_head</span><span class="p">(</span><span class="n">features</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>       <span class="c1"># Global atmosphere</span>
+        <span class="n">transmission</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">beta</span> <span class="o">*</span> <span class="n">depth</span><span class="p">)</span>                  <span class="c1"># Koschmieder t(x)</span>
+        <span class="k">return</span> <span class="p">{</span><span class="s2">"depth"</span><span class="p">:</span> <span class="n">depth</span><span class="p">,</span> <span class="s2">"airlight"</span><span class="p">:</span> <span class="n">airlight</span><span class="p">,</span> <span class="s2">"beta"</span><span class="p">:</span> <span class="n">beta</span><span class="p">,</span> <span class="s2">"transmission"</span><span class="p">:</span> <span class="n">transmission</span><span class="p">}</span>
+</code></pre>
+          </div>
+        </div>
+
+        <!-- TAB 2: Feature Pyramid Decoder -->
+        <div class="code-tab-panel" id="tab-decoder">
+          <div class="panel-explainer">
+            <div class="explainer-header">
+              <h3>Multi-Scale Feature Pyramid Decoder with Residual Blocks</h3>
+            </div>
+            <p>
+              The decoder fuses deep semantic features (which encode scene context and object classification) with early lateral skip connections (which preserve razor-sharp pixel edges and boundary contours).
+              Each stage applies a <strong>1x1 Lateral Projection</strong>, <strong>Bilinear 2x Upsampling</strong>, <strong>3x3 Channel Fusion</strong>, and a <strong>ResidualBlock</strong> that prevents vanishing gradients.
+            </p>
+            <div class="math-callout">
+              <span class="math-label">Stage Equation:</span>
+              <code>F_i = ELU(BatchNorm(Conv3x3(Concat(Upsample(D_{i+1}), Proj(C_i))))) &emsp;&rarr;&emsp; D_i = F_i + ResConv(F_i)</code>
+            </div>
+          </div>
+
+          <div class="code-editor-box">
+            <div class="editor-titlebar">
+              <div class="editor-file-info">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+                <span class="editor-filename">pinn_depth / models / decoder.py</span>
+              </div>
+              <div class="editor-actions">
+                <span class="editor-lang-badge">PyTorch 2.5</span>
+                <button class="copy-code-btn" data-target="code-decoder">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <span>Copy Code</span>
+                </button>
+              </div>
+            </div>
+            <pre class="code-pre"><code id="code-decoder"><span class="c1"># =========================================================================</span>
+<span class="c1"># Multi-Scale FPN Decoder with Residual Refinement</span>
+<span class="c1"># =========================================================================</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torch.nn</span> <span class="kn">as</span> <span class="nn">nn</span>
+<span class="kn">import</span> <span class="nn">torch.nn.functional</span> <span class="kn">as</span> <span class="nn">F</span>
+<span class="kn">from</span> <span class="nn">typing</span> <span class="kn">import</span> <span class="n">List</span>
+
+
+<span class="k">class</span> <span class="nc">ResidualBlock</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""Refines spatial feature representations while preserving high-frequency gradients."""</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">channels</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bn1</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm2d</span><span class="p">(</span><span class="n">channels</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">act</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">conv2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">channels</span><span class="p">,</span> <span class="n">channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">bn2</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm2d</span><span class="p">(</span><span class="n">channels</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">act</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bn2</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv2</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">act</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">bn1</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">conv1</span><span class="p">(</span><span class="n">x</span><span class="p">)))))</span> <span class="o">+</span> <span class="n">x</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">DecoderStage</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""Individual Decoder Stage with Lateral Skip Projection and 2x Bilinear Upsampling."""</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">in_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">skip_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">skip_proj</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">skip_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm2d</span><span class="p">(</span><span class="n">out_channels</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">fuse_conv</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">in_channels</span> <span class="o">+</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">out_channels</span><span class="p">,</span> <span class="n">kernel_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm2d</span><span class="p">(</span><span class="n">out_channels</span><span class="p">),</span>
+            <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="n">inplace</span><span class="o">=</span><span class="kc">True</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">refine</span> <span class="o">=</span> <span class="n">ResidualBlock</span><span class="p">(</span><span class="n">out_channels</span><span class="p">)</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">skip</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">skip_feat</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">skip_proj</span><span class="p">(</span><span class="n">skip</span><span class="p">)</span>
+        <span class="n">x_up</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">skip_feat</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">:],</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"bilinear"</span><span class="p">,</span> <span class="n">align_corners</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="n">fused</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">fuse_conv</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">cat</span><span class="p">([</span><span class="n">x_up</span><span class="p">,</span> <span class="n">skip_feat</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">1</span><span class="p">))</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">refine</span><span class="p">(</span><span class="n">fused</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">FeaturePyramidDecoder</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""Hierarchical Decoder combining C1 through C5 to native resolution [B, 32, H, W]."""</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">encoder_channels</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span><span class="mi">64</span><span class="p">,</span> <span class="mi">64</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">256</span><span class="p">,</span> <span class="mi">512</span><span class="p">]):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">out_channels</span> <span class="o">=</span> <span class="mi">32</span>
+        <span class="n">c1</span><span class="p">,</span> <span class="n">c2</span><span class="p">,</span> <span class="n">c3</span><span class="p">,</span> <span class="n">c4</span><span class="p">,</span> <span class="n">c5</span> <span class="o">=</span> <span class="n">encoder_channels</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">top_proj</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="n">c5</span><span class="p">,</span> <span class="mi">128</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm2d</span><span class="p">(</span><span class="mi">128</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="kc">True</span><span class="p">),</span> <span class="n">ResidualBlock</span><span class="p">(</span><span class="mi">128</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stage4</span> <span class="o">=</span> <span class="n">DecoderStage</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">c4</span><span class="p">,</span> <span class="mi">128</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stage3</span> <span class="o">=</span> <span class="n">DecoderStage</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">c3</span><span class="p">,</span> <span class="mi">128</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stage2</span> <span class="o">=</span> <span class="n">DecoderStage</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">c2</span><span class="p">,</span> <span class="mi">128</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">stage1</span> <span class="o">=</span> <span class="n">DecoderStage</span><span class="p">(</span><span class="mi">128</span><span class="p">,</span> <span class="n">c1</span><span class="p">,</span> <span class="mi">64</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">final_stage</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">Sequential</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Conv2d</span><span class="p">(</span><span class="mi">64</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="n">padding</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">bias</span><span class="o">=</span><span class="kc">False</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">BatchNorm2d</span><span class="p">(</span><span class="mi">32</span><span class="p">),</span> <span class="n">nn</span><span class="o">.</span><span class="n">ELU</span><span class="p">(</span><span class="kc">True</span><span class="p">),</span> <span class="n">ResidualBlock</span><span class="p">(</span><span class="mi">32</span><span class="p">))</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">features</span><span class="p">:</span> <span class="n">List</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">target_size</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">c1</span><span class="p">,</span> <span class="n">c2</span><span class="p">,</span> <span class="n">c3</span><span class="p">,</span> <span class="n">c4</span><span class="p">,</span> <span class="n">c5</span> <span class="o">=</span> <span class="n">features</span>
+        <span class="n">d1</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stage1</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stage2</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stage3</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">stage4</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">top_proj</span><span class="p">(</span><span class="n">c5</span><span class="p">),</span> <span class="n">c4</span><span class="p">),</span> <span class="n">c3</span><span class="p">),</span> <span class="n">c2</span><span class="p">),</span> <span class="n">c1</span><span class="p">)</span>
+        <span class="n">out</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">interpolate</span><span class="p">(</span><span class="n">d1</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="n">target_size</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s2">"bilinear"</span><span class="p">,</span> <span class="n">align_corners</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">final_stage</span><span class="p">(</span><span class="n">out</span><span class="p">)</span>
+</code></pre>
+          </div>
+        </div>
+
+        <!-- TAB 3: Physics & Losses -->
+        <div class="code-tab-panel" id="tab-losses">
+          <div class="panel-explainer">
+            <div class="explainer-header">
+              <h3>Physics-Informed Loss Function: Ranking + Scattering Consistency</h3>
+            </div>
+            <p>
+              Rather than training on noisy, uncalibrated absolute depths, our objective combines:
+              <strong>(1) Pairwise Relative Depth Ranking Loss</strong> sampling pairs (p<sub>0</sub>, p<sub>1</sub>) and penalizing order reversals, 
+              <strong>(2) Koschmieder Transmission Consistency</strong> ensuring physical haze extinction matches depth, and 
+              <strong>(3) Edge-Aware Smoothness</strong> allowing sharp depth jumps only at true visual image contours.
+            </p>
+            <div class="math-callout">
+              <span class="math-label">Combined Objective:</span>
+              <code>L_{PINN} = L_{rank}(d, d^*) + &lambda;_{phys} ||I(x) - [J(x)e^{-&beta; d(x)} + A(1 - e^{-&beta; d(x)})]||_1 + &lambda;_{smooth} L_{edge}(d, I)</code>
+            </div>
+          </div>
+
+          <div class="code-editor-box">
+            <div class="editor-titlebar">
+              <div class="editor-file-info">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49"/></svg>
+                <span class="editor-filename">pinn_depth / physics / losses.py</span>
+              </div>
+              <div class="editor-actions">
+                <span class="editor-lang-badge">PyTorch 2.5</span>
+                <button class="copy-code-btn" data-target="code-losses">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <span>Copy Code</span>
+                </button>
+              </div>
+            </div>
+            <pre class="code-pre"><code id="code-losses"><span class="c1"># =========================================================================</span>
+<span class="c1"># Physics-Informed Relative Depth Losses</span>
+<span class="c1"># =========================================================================</span>
+<span class="kn">import</span> <span class="nn">torch</span>
+<span class="kn">import</span> <span class="nn">torch.nn</span> <span class="kn">as</span> <span class="nn">nn</span>
+<span class="kn">import</span> <span class="nn">torch.nn.functional</span> <span class="kn">as</span> <span class="nn">F</span>
+
+
+<span class="k">class</span> <span class="nc">RelativeDepthRankingLoss</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""</span>
+<span class="sd">    Pairwise Ordinal Ranking Loss for relative depth.</span>
+<span class="sd">    Samples random pixel pairs and penalizes depth ordering violations:</span>
+<span class="sd">        loss = log(1 + exp(-l_k * (d_pred_0 - d_pred_1)))</span>
+<span class="sd">    """</span>
+    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_pairs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">5000</span><span class="p">,</span> <span class="n">margin_tau</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.03</span><span class="p">):</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">num_pairs</span> <span class="o">=</span> <span class="n">num_pairs</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">margin_tau</span> <span class="o">=</span> <span class="n">margin_tau</span>
+
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">pred</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">gt</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">B</span><span class="p">,</span> <span class="n">_</span><span class="p">,</span> <span class="n">H</span><span class="p">,</span> <span class="n">W</span> <span class="o">=</span> <span class="n">pred</span><span class="o">.</span><span class="n">shape</span>
+        <span class="k">if</span> <span class="n">mask</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">mask</span> <span class="o">=</span> <span class="p">(</span><span class="n">gt</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">)</span> <span class="o">&amp;</span> <span class="n">torch</span><span class="o">.</span><span class="n">isfinite</span><span class="p">(</span><span class="n">gt</span><span class="p">)</span>
+
+        <span class="n">total_loss</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">pred</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">B</span><span class="p">):</span>
+            <span class="n">indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">nonzero</span><span class="p">(</span><span class="n">mask</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="mi">0</span><span class="p">])</span>
+            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">100</span><span class="p">:</span> <span class="k">continue</span>
+            <span class="n">N</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">num_pairs</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span> <span class="o">//</span> <span class="mi">2</span><span class="p">)</span>
+            <span class="n">i0</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">),</span> <span class="p">(</span><span class="n">N</span><span class="p">,))</span>
+            <span class="n">i1</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">indices</span><span class="p">),</span> <span class="p">(</span><span class="n">N</span><span class="p">,))</span>
+            <span class="n">diff_gt</span> <span class="o">=</span> <span class="n">gt</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">indices</span><span class="p">[</span><span class="n">i0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">indices</span><span class="p">[</span><span class="n">i0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]]</span> <span class="o">-</span> <span class="n">gt</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">indices</span><span class="p">[</span><span class="n">i1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">indices</span><span class="p">[</span><span class="n">i1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]]</span>
+            <span class="n">diff_pr</span> <span class="o">=</span> <span class="n">pred</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">indices</span><span class="p">[</span><span class="n">i0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">indices</span><span class="p">[</span><span class="n">i0</span><span class="p">,</span> <span class="mi">1</span><span class="p">]]</span> <span class="o">-</span> <span class="n">pred</span><span class="p">[</span><span class="n">b</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="n">indices</span><span class="p">[</span><span class="n">i1</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">indices</span><span class="p">[</span><span class="n">i1</span><span class="p">,</span> <span class="mi">1</span><span class="p">]]</span>
+
+            <span class="n">labels</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">diff_gt</span><span class="p">)</span>
+            <span class="n">labels</span><span class="p">[</span><span class="n">diff_gt</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">margin_tau</span><span class="p">]</span> <span class="o">=</span> <span class="mf">1.0</span>
+            <span class="n">labels</span><span class="p">[</span><span class="n">diff_gt</span> <span class="o">&lt;</span> <span class="o">-</span><span class="bp">self</span><span class="o">.</span><span class="n">margin_tau</span><span class="p">]</span> <span class="o">=</span> <span class="o">-</span><span class="mf">1.0</span>
+
+            <span class="n">ineq</span> <span class="o">=</span> <span class="n">labels</span> <span class="o">!=</span> <span class="mi">0</span>
+            <span class="k">if</span> <span class="n">ineq</span><span class="o">.</span><span class="n">any</span><span class="p">():</span>
+                <span class="n">total_loss</span> <span class="o">+=</span> <span class="n">torch</span><span class="o">.</span><span class="n">log1p</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">labels</span><span class="p">[</span><span class="n">ineq</span><span class="p">]</span> <span class="o">*</span> <span class="n">diff_pr</span><span class="p">[</span><span class="n">ineq</span><span class="p">]))</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span>
+        <span class="k">return</span> <span class="n">total_loss</span> <span class="o">/</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">B</span><span class="p">)</span>
+
+
+<span class="k">class</span> <span class="nc">PhysicsConsistencyLoss</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+    <span class="sd">"""Koschmieder physical reconstruction loss: ||I - [J*t + A*(1 - t)]||_1"""</span>
+    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">image</span><span class="p">,</span> <span class="n">pred_depth</span><span class="p">,</span> <span class="n">airlight</span><span class="p">,</span> <span class="n">beta</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+        <span class="n">t</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">exp</span><span class="p">(</span><span class="o">-</span><span class="n">beta</span> <span class="o">*</span> <span class="n">pred_depth</span><span class="p">)</span>
+        <span class="n">j</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp</span><span class="p">((</span><span class="n">image</span> <span class="o">-</span> <span class="n">airlight</span><span class="p">)</span> <span class="o">/</span> <span class="n">torch</span><span class="o">.</span><span class="n">clamp</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="mf">1e-4</span><span class="p">)</span> <span class="o">+</span> <span class="n">airlight</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+        <span class="n">reconstructed</span> <span class="o">=</span> <span class="n">j</span> <span class="o">*</span> <span class="n">t</span> <span class="o">+</span> <span class="n">airlight</span> <span class="o">*</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">t</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">F</span><span class="o">.</span><span class="n">l1_loss</span><span class="p">(</span><span class="n">reconstructed</span><span class="p">,</span> <span class="n">image</span><span class="p">)</span>
+</code></pre>
+          </div>
+        </div>
+
+        <!-- TAB 4: FLIR MSX Clarity -->
+        <div class="code-tab-panel" id="tab-msx">
+          <div class="panel-explainer">
+            <div class="explainer-header">
+              <h3>FLIR MSX Dynamic Detail Embossing &amp; Tone Expansion</h3>
+            </div>
+            <p>
+              Standard thermal imaging algorithms blur adjacent objects into a monochromatic bunch. 
+              <strong>FLIR MSX (Multi-Spectral Dynamic Imaging)</strong> uses an edge-guided high-pass filter on the visible RGB luminance channel and embosses the physical relief onto the false-color thermal depth map.
+              Coupled with <strong>Adaptive Percentile Contrast Expansion (1.35x Gamma)</strong>, individual plants, petals, vehicles, and structures remain distinctly identifiable.
+            </p>
+            <div class="math-callout">
+              <span class="math-label">MSX Relief Equation:</span>
+              <code>H(x) = Y_{gray}(x) &minus; GaussianBlur(Y_{gray}, &sigma;=1.3) &emsp;&rArr;&emsp; C_{fused} = C_{thermal} &bull; [(1 - s) + 2s(0.5 + 2.4 H(x))]</code>
+            </div>
+          </div>
+
+          <div class="code-editor-box">
+            <div class="editor-titlebar">
+              <div class="editor-file-info">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                <span class="editor-filename">pinn_depth / physics / das_physics.py</span>
+              </div>
+              <div class="editor-actions">
+                <span class="editor-lang-badge">OpenCV &bull; NumPy</span>
+                <button class="copy-code-btn" data-target="code-msx">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <span>Copy Code</span>
+                </button>
+              </div>
+            </div>
+            <pre class="code-pre"><code id="code-msx"><span class="c1"># =========================================================================</span>
+<span class="c1"># FLIR MSX Dynamic Detail Embossing &amp; Tone Expansion</span>
+<span class="c1"># =========================================================================</span>
+<span class="kn">import</span> <span class="nn">cv2</span>
+<span class="kn">import</span> <span class="nn">numpy</span> <span class="kn">as</span> <span class="nn">np</span>
+
+
+<span class="k">def</span> <span class="nf">apply_flir_msx_detail_embossing</span><span class="p">(</span>
+    <span class="n">thermal_rgb</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">img_rgb</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
+    <span class="n">strength</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">0.55</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">"""</span>
+<span class="sd">    Extracts high-frequency visual edge relief from RGB luminance and</span>
+<span class="sd">    embosses it directly onto the thermal depth map, achieving authentic FLIR MSX clarity.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="n">strength</span> <span class="o">&lt;=</span> <span class="mf">0.001</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">thermal_rgb</span>
+
+    <span class="c1"># Step 1: Extract luminance from RGB</span>
+    <span class="n">gray</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">cvtColor</span><span class="p">(</span><span class="n">img_rgb</span><span class="p">,</span> <span class="n">cv2</span><span class="o">.</span><span class="n">COLOR_RGB2GRAY</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span> <span class="o">/</span> <span class="mf">255.0</span>
+
+    <span class="c1"># Step 2: High-pass spatial edge filter via unsharp masking</span>
+    <span class="n">blur</span> <span class="o">=</span> <span class="n">cv2</span><span class="o">.</span><span class="n">GaussianBlur</span><span class="p">(</span><span class="n">gray</span><span class="p">,</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="n">sigmaX</span><span class="o">=</span><span class="mf">1.3</span><span class="p">)</span>
+    <span class="n">highpass</span> <span class="o">=</span> <span class="n">gray</span> <span class="o">-</span> <span class="n">blur</span>
+
+    <span class="c1"># Step 3: Modulate thermal pixel luminance while strictly preserving color hues</span>
+    <span class="n">edge_relief</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="mf">0.5</span> <span class="o">+</span> <span class="mf">2.4</span> <span class="o">*</span> <span class="n">highpass</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="n">thermal_float</span> <span class="o">=</span> <span class="n">thermal_rgb</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span> <span class="o">/</span> <span class="mf">255.0</span>
+    <span class="n">modulator</span> <span class="o">=</span> <span class="p">(</span><span class="mf">1.0</span> <span class="o">-</span> <span class="n">strength</span><span class="p">)</span> <span class="o">+</span> <span class="p">(</span><span class="mf">2.0</span> <span class="o">*</span> <span class="n">strength</span><span class="p">)</span> <span class="o">*</span> <span class="n">edge_relief</span><span class="p">[:,</span> <span class="p">:,</span> <span class="n">np</span><span class="o">.</span><span class="n">newaxis</span><span class="p">]</span>
+    <span class="n">fused</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">thermal_float</span> <span class="o">*</span> <span class="n">modulator</span><span class="p">,</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">fused</span> <span class="o">*</span> <span class="mf">255.0</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">uint8</span><span class="p">)</span>
+
+
+<span class="k">def</span> <span class="nf">enhance_depth_contrast</span><span class="p">(</span><span class="n">depth</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">gamma</span><span class="p">:</span> <span class="nb">float</span> <span class="o">=</span> <span class="mf">1.35</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">:</span>
+    <span class="sd">"""Stretches active percentile dynamic range and expands midtone separation."""</span>
+    <span class="n">p1</span><span class="p">,</span> <span class="n">p99</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">depth</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">),</span> <span class="n">np</span><span class="o">.</span><span class="n">percentile</span><span class="p">(</span><span class="n">depth</span><span class="p">,</span> <span class="mf">99.0</span><span class="p">)</span>
+    <span class="n">stretched</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">clip</span><span class="p">((</span><span class="n">depth</span> <span class="o">-</span> <span class="n">p1</span><span class="p">)</span> <span class="o">/</span> <span class="nb">max</span><span class="p">(</span><span class="n">p99</span> <span class="o">-</span> <span class="n">p1</span><span class="p">,</span> <span class="mf">1e-5</span><span class="p">),</span> <span class="mf">0.0</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">np</span><span class="o">.</span><span class="n">power</span><span class="p">(</span><span class="n">stretched</span><span class="p">,</span> <span class="n">gamma</span><span class="p">)</span>
+</code></pre>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="app-footer">
+    <div>Physics-Informed Convolutional Neural Network for Relative Monocular Depth Estimation</div>
+    <div>ResNet-18 Encoder &bull; Custom FPN Decoder &bull; Koschmieder Scattering Constraint</div>
+  </footer>
+
+  <script src="/js/app.js?v=3.1"></script>
+</body>
+</html>
+

@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+checkpoints/
+*.pt
+cloudflared.exe
+.pytest_cache
+*.log
+data/
+results/
+tests/
