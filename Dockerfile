@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application source code
 COPY . .
 
-# Hugging Face Spaces port
+# Expose port (default 7860, or dynamically bound by Render/Railway via $PORT)
 EXPOSE 7860
 
-# Run FastAPI app
-CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "7860"]
+# Run FastAPI app with dynamic port binding
+CMD ["sh", "-c", "uvicorn api.app:app --host 0.0.0.0 --port ${PORT:-7860}"]
