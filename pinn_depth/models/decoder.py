@@ -1,30 +1,33 @@
 """
-Multi-Scale Feature Pyramid Decoder with Residual Refinement
-for Physics-Informed Relative Depth Estimation.
+=============================================================================
+PINN-Depth: Multi-Scale Feature Pyramid Decoder with Residual Refinement
+=============================================================================
+This module combines deep semantic scene features (C5) with sharp shallow edge
+features (C1, C2, C3, C4) to construct a high-resolution, edge-preserving
+depth representation.
 
-Architecture Overview:
-    1. Multi-Scale Skip Connections:
-       Takes feature maps [C1, C2, C3, C4, C5] from the ResNet encoder:
-       - C1: [B,  64, H/2,  W/2]  (Fine spatial details, edges, textures)
-       - C2: [B,  64, H/4,  W/4]  (Local object boundaries)
-       - C3: [B, 128, H/8,  W/8]  (Mid-level parts & object geometry)
-       - C4: [B, 256, H/16, W/16] (High-level semantic regions)
-       - C5: [B, 512, H/32, W/32] (Global scene context & sky/horizon)
+How It Works (Top-Down Progressive Fusion):
+    1. Start at the highest semantic feature: C5 [512 channels, H/32, W/32].
+    2. At each stage:
+       - Upsample the current deep feature by 2x using Bilinear Interpolation.
+       - Project the lateral skip feature from the encoder using a 1x1 Conv.
+       - Concatenate them along the channel dimension.
+       - Fuse channels with a 3x3 Conv + ELU + BatchNorm.
+       - Refine boundaries with a Residual Block: y = x + F(x).
+    3. Final Stage:
+       - Upsample to native image resolution (H x W) and output 32 clean channels.
 
-    2. Top-Down Feature Fusion:
-       Starting from the highest semantic feature (C5), features are progressively
-       upsampled by 2x using bilinear interpolation, concatenated with projected
-       skip features from the corresponding encoder stage, and refined via
-       residual convolution blocks.
-
-    3. Mathematical Formulation of Decoder Stage:
-       - Skip Projection: S_i = ELU(BatchNorm(Conv1x1(C_i)))
-       - Upsample: U_{i+1} = Upsample_2x(D_{i+1})
-       - Feature Fusion: F_i = ELU(BatchNorm(Conv3x3(Concat(U_{i+1}, S_i))))
-       - Residual Refine: D_i = F_i + Conv3x3(ELU(BatchNorm(Conv3x3(F_i))))
+Tensor Dimensions Progression:
+    - Input: [C1, C2, C3, C4, C5] from ResNetEncoder
+    - Stage 4: Fuses (Upsample(C5), C4) -> [128 channels, H/16, W/16]
+    - Stage 3: Fuses (Upsample(D4), C3) -> [128 channels, H/8,  W/8 ]
+    - Stage 2: Fuses (Upsample(D3), C2) -> [128 channels, H/4,  W/4 ]
+    - Stage 1: Fuses (Upsample(D2), C1) -> [ 64 channels, H/2,  W/2 ]
+    - Final:   Upsample(D1) -> Conv3x3  -> [ 32 channels, H,    W   ]
+=============================================================================
 """
 
-from typing import List
+from typing import List, Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -33,10 +36,8 @@ import torch.nn.functional as F
 class ResidualBlock(nn.Module):
     """
     Residual Refinement Block.
-    
-    Refines fused feature representations through residual learning,
-    preserving high-frequency depth gradients and preventing gradient vanishing:
-        y = x + W2 * (ELU(BatchNorm(W1 * x)))
+    Refines feature representations without gradient degradation:
+        output = input + Conv3x3(ELU(BN(Conv3x3(ELU(BN(input))))))
     """
 
     def __init__(self, channels: int):
@@ -44,6 +45,7 @@ class ResidualBlock(nn.Module):
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(channels)
         self.act = nn.ELU(inplace=True)
+
         self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1, bias=False)
         self.bn2 = nn.BatchNorm2d(channels)
 
@@ -56,71 +58,60 @@ class ResidualBlock(nn.Module):
 
 class DecoderStage(nn.Module):
     """
-    Individual Feature Pyramid Decoder Stage.
-    
-    Combines upsampled deep semantic features with lateral skip features
-    from earlier encoder layers:
-        1. 1x1 conv projects lateral skip features to matching channel dimension.
-        2. Bilinear upsampling doubles spatial resolution of deep features.
-        3. 3x3 conv fuses the concatenated channels.
-        4. ResidualBlock refines spatial details and boundary sharpness.
+    Individual FPN Decoder Stage.
+    Fuses deep semantic features with shallow high-resolution skip features.
     """
 
     def __init__(self, in_channels: int, skip_channels: int, out_channels: int):
         super().__init__()
-        # Lateral skip projection (1x1 conv)
+        # 1x1 Conv to match skip connection channels
         self.skip_proj = nn.Sequential(
             nn.Conv2d(skip_channels, out_channels, kernel_size=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ELU(inplace=True),
         )
-        # Feature fusion after bilinear upsampling (3x3 conv)
+
+        # 3x3 Conv to fuse upsampled deep features + projected skip features
         self.fuse_conv = nn.Sequential(
             nn.Conv2d(in_channels + out_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
             nn.ELU(inplace=True),
         )
-        # Residual refinement block
+
+        # Residual block to refine object boundaries
         self.refine = ResidualBlock(out_channels)
 
     def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
-        # Step 1: Lateral projection of high-resolution skip features
+        # Step 1: Project lateral skip connection
         skip_feat = self.skip_proj(skip)
-        
-        # Step 2: Bilinear upsampling of deep semantic features
+
+        # Step 2: Upsample deep feature by 2x to match skip feature spatial size
         target_size = skip_feat.shape[-2:]
         x_up = F.interpolate(x, size=target_size, mode="bilinear", align_corners=True)
-        
-        # Step 3: Channel concatenation & fusion
+
+        # Step 3: Concatenate and fuse
         fused = self.fuse_conv(torch.cat([x_up, skip_feat], dim=1))
-        
-        # Step 4: Residual boundary refinement
+
+        # Step 4: Refine boundaries
         return self.refine(fused)
 
 
 class FeaturePyramidDecoder(nn.Module):
     """
-    Multi-Scale Feature Pyramid Decoder.
-    
-    Decodes multi-level encoder features (C1 through C5) into a unified,
-    dense 32-channel representation at native image resolution for continuous
-    relative depth regression.
-    
-    Tensor Flow:
-        C5 [512, H/32, W/32] -> top_proj    -> [128, H/32, W/32]
-        + C4 [256, H/16, W/16] -> stage4    -> [128, H/16, W/16]
-        + C3 [128, H/8,  W/8]  -> stage3    -> [128, H/8,  W/8]
-        + C2 [64,  H/4,  W/4]  -> stage2    -> [128, H/4,  W/4]
-        + C1 [64,  H/2,  W/2]  -> stage1    -> [64,  H/2,  W/2]
-        final_stage (upsample to H x W)     -> [32,  H,    W]
+    Hierarchical Feature Pyramid Decoder.
+    Combines C1 through C5 into a 32-channel feature map at native image resolution.
     """
 
-    def __init__(self, encoder_channels: List[int] = [64, 64, 128, 256, 512], decoder_channels: int = 64):
+    def __init__(
+        self,
+        encoder_channels: List[int] = [64, 64, 128, 256, 512],
+        decoder_channels: int = 64,
+    ):
         super().__init__()
         self.out_channels = 32
         c1, c2, c3, c4, c5 = encoder_channels
 
-        # Top semantic projection for C5
+        # Top projection: Compress C5 (512 channels) to 128 channels
         self.top_proj = nn.Sequential(
             nn.Conv2d(c5, 128, kernel_size=1, bias=False),
             nn.BatchNorm2d(128),
@@ -128,13 +119,13 @@ class FeaturePyramidDecoder(nn.Module):
             ResidualBlock(128),
         )
 
-        # Progressive decoding stages
+        # Top-down decoding stages (Stride 32 -> 16 -> 8 -> 4 -> 2)
         self.stage4 = DecoderStage(in_channels=128, skip_channels=c4, out_channels=128)
         self.stage3 = DecoderStage(in_channels=128, skip_channels=c3, out_channels=128)
         self.stage2 = DecoderStage(in_channels=128, skip_channels=c2, out_channels=128)
         self.stage1 = DecoderStage(in_channels=128, skip_channels=c1, out_channels=64)
 
-        # Final full-resolution refinement stage
+        # Final stage: Upsample to native image size (H x W) and reduce to 32 channels
         self.final_stage = nn.Sequential(
             nn.Conv2d(64, 32, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(32),
@@ -142,29 +133,30 @@ class FeaturePyramidDecoder(nn.Module):
             ResidualBlock(32),
         )
 
-    def forward(self, features: List[torch.Tensor], target_size: torch.Size = None) -> torch.Tensor:
+    def forward(
+        self,
+        features: List[torch.Tensor],
+        target_size: Optional[torch.Size] = None,
+    ) -> torch.Tensor:
         """
-        Forward pass decoding multi-scale encoder features.
-        
         Args:
-            features: [C1, C2, C3, C4, C5] from encoder.
-            target_size: Target output spatial resolution (H, W).
-            
+            features: [C1, C2, C3, C4, C5] from ResNetEncoder.
+            target_size: Target spatial dimensions (H, W).
         Returns:
-            Decoded feature map: [B, 32, H, W].
+            Unified feature representation of shape [Batch, 32, Height, Width].
         """
         c1, c2, c3, c4, c5 = features
 
-        # Top projection
+        # Step 1: Compress top semantic feature (C5)
         d5 = self.top_proj(c5)
 
-        # Hierarchical decoding with skip connections
-        d4 = self.stage4(d5, c4)
-        d3 = self.stage3(d4, c3)
-        d2 = self.stage2(d3, c2)
-        d1 = self.stage1(d2, c1)
+        # Step 2: Progressively fuse with skip connections
+        d4 = self.stage4(d5, c4)  # Resolution: H/16 x W/16
+        d3 = self.stage3(d4, c3)  # Resolution: H/8  x W/8
+        d2 = self.stage2(d3, c2)  # Resolution: H/4  x W/4
+        d1 = self.stage1(d2, c1)  # Resolution: H/2  x W/2
 
-        # Upsample to native image size
+        # Step 3: Final upsampling to original input resolution
         if target_size is not None:
             out = F.interpolate(d1, size=target_size, mode="bilinear", align_corners=True)
         else:

@@ -27,13 +27,22 @@ A monocular relative depth estimation system that combines deep convolutional fe
   - $\mathcal{L}_{\text{phys}}$: Differentiable atmospheric transmission and dark channel consistency.
   - $\mathcal{L}_{\text{ssi}}$: Scale-and-shift invariant supervision.
   - $\mathcal{L}_{\text{smooth}}$: Edge-aware first-order gradient smoothness.
-- **Human-Designed, Research-Grade Light UI**:
-  - Side-by-side interactive split comparison slider.
-  - Live hover depth probe with coordinate readout.
-  - Click-to-compare tool: place Point A & Point B to compute relative ordering, depth delta $\Delta d$, and confidence.
-  - Colormap switcher (Turbo, Inferno, Viridis, Magma, Grayscale).
-  - Interactive Three.js 3D WebGL perspective view.
-  - Preloaded outdoor sample gallery.
+- **Human-Designed, Research-Grade Viewer UI**:
+  - Side-by-side synchronized RGB scene and relative depth view.
+  - FLIR Thermal Ironbow, Thermal Rainbow, and Multi-Hue scientific palettes.
+  - FLIR MSX (Multi-Spectral Dynamic Imaging) detail relief embossing.
+  - Live hover depth probe with real-time coordinate & value readout.
+  - Interactive Pin A & Pin B placement with ordinal relative depth evaluation and confidence scoring.
+  - In-browser model code and physical architecture walkthrough.
+
+---
+
+## 📖 Complete Model Documentation
+
+For an exhaustive, line-by-line explanation of every class, function, tensor transformation, and physical equation (ideal for academic project presentations, viva defense, or technical interviews), see:
+- 📄 **[Microsoft Word Document (.docx)](file:///c:/Users/gyanr/Desktop/Coding/Others/PINN2/docs/PINN_Depth_Model_Architecture_and_Line_by_Line_Guide.docx)** — Formatted Word file with styled tables, code blocks, callouts, and Viva Q&A.
+- 📘 **[Markdown Architecture Guide](file:///c:/Users/gyanr/Desktop/Coding/Others/PINN2/docs/MODEL_ARCHITECTURE_EXPLAINED.md)**
+- 💡 Includes 10 top examiner defense questions with detailed technical answers.
 
 ---
 

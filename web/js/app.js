@@ -1,28 +1,16 @@
 /**
  * Physics-Informed Relative Depth Estimation Web Application
- * Handles split slider, point-to-point relative distance probing, 3D WebGL mesh, and uploads.
+ * Handles side-by-side synchronized view, point-to-point relative distance probing, and inference.
  */
 
 document.addEventListener("DOMContentLoaded", () => {
   // Elements
   const dualGrid = document.getElementById("dual-grid");
-  const splitViewport = document.getElementById("split-viewport");
-  const splitClip = document.getElementById("split-clip");
-  const splitHandle = document.getElementById("split-handle");
   const imgRgb = document.getElementById("img-rgb");
   const imgDepth = document.getElementById("img-depth");
-  const imgRgbSplit = document.getElementById("img-rgb-split");
-  const imgDepthSplit = document.getElementById("img-depth-split");
   const boxRgb = document.getElementById("box-rgb");
   const boxDepth = document.getElementById("box-depth");
   const loadingOverlay = document.getElementById("loading-overlay");
-
-  const tabSide = document.getElementById("tab-side");
-  const tabSplit = document.getElementById("tab-split");
-  const tabDepth = document.getElementById("tab-depth");
-  const tabRgb = document.getElementById("tab-rgb");
-  const tab3d = document.getElementById("tab-3d");
-  const threejsContainer = document.getElementById("threejs-container");
 
   const modelSelect = document.getElementById("model-select");
   const colormapSelect = document.getElementById("colormap-select");
@@ -39,8 +27,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const pinBRgb = document.getElementById("pin-b-rgb");
   const pinADepth = document.getElementById("pin-a-depth");
   const pinBDepth = document.getElementById("pin-b-depth");
-  const pinASplit = document.getElementById("pin-a-split");
-  const pinBSplit = document.getElementById("pin-b-split");
   const crosshairRgb = document.getElementById("crosshair-rgb");
   const crosshairDepth = document.getElementById("crosshair-depth");
   const btnPinMode = document.getElementById("btn-pin-mode");
@@ -149,13 +135,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentSampleId = "garden";
   let currentFile = null;
   let currentData = null;
-  let isDraggingSplit = false;
-  let activeTab = "side"; // 'side' (default), 'split', 'depth', 'rgb', '3d'
   let pinMode = true;
   let points = []; // [{x, y, relX, relY, depth}]
-
-  // Three.js State
-  let scene, camera, renderer, controls, mesh3d;
 
   // 1. Fetch Backend Health
   fetch("/health")
@@ -224,8 +205,6 @@ document.addEventListener("DOMContentLoaded", () => {
         currentData = data;
         imgRgb.src = data.original_image;
         imgDepth.src = data.depth_map_png;
-        if (imgRgbSplit) imgRgbSplit.src = data.original_image;
-        if (imgDepthSplit) imgDepthSplit.src = data.depth_map_png;
         if (activeColormapLabel) {
           const selOpt = colormapSelect.options[colormapSelect.selectedIndex];
           activeColormapLabel.textContent = selOpt ? selOpt.text.split("(")[0].trim() : "Multi-Hue";
@@ -249,12 +228,6 @@ document.addEventListener("DOMContentLoaded", () => {
           sceneDimBadge.textContent = `${data.image_size[0]} × ${data.image_size[1]} px`;
         }
         updateDepthScaleBar();
-
-        setSplitPosition(50);
-
-        if (activeTab === "3d") {
-          initOrUpdate3D();
-        }
       })
       .catch((err) => {
         console.error(err);
@@ -267,61 +240,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initial setup & prediction load
   updateDepthScaleBar();
-  setTab("side");
   loadPrediction();
 
-  // 4. Split Slider Interaction
-  function setSplitPosition(percent) {
-    const p = Math.max(0, Math.min(100, percent));
-    splitClip.style.width = `${p}%`;
-    splitHandle.style.left = `${p}%`;
-  }
-
-  if (splitViewport) {
-    splitViewport.addEventListener("mousedown", (e) => {
-      if (activeTab !== "split") return;
-      const rect = splitViewport.getBoundingClientRect();
-      const handleX = rect.left + (rect.width * parseFloat(splitHandle.style.left || 50)) / 100;
-      if (Math.abs(e.clientX - handleX) < 25) {
-        isDraggingSplit = true;
-        e.preventDefault();
-      }
-    });
-
-    splitViewport.addEventListener("mousemove", (e) => {
-      if (activeTab !== "split" && activeTab !== "depth" && activeTab !== "rgb") return;
-      const rect = splitViewport.getBoundingClientRect();
-      const relX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      const relY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-      handleProbeHover(relX, relY, false);
-    });
-
-    splitViewport.addEventListener("click", (e) => {
-      if (!currentData || isDraggingSplit) return;
-      const rect = splitViewport.getBoundingClientRect();
-      const relX = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      const relY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
-      handlePointSelection(relX, relY);
-    });
-
-    splitViewport.addEventListener("mouseleave", handleProbeLeave);
-  }
-
-  window.addEventListener("mousemove", (e) => {
-    if (!isDraggingSplit || activeTab !== "split" || !splitViewport) return;
-    const rect = splitViewport.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const percent = (x / rect.width) * 100;
-    setSplitPosition(percent);
-  });
-
-  window.addEventListener("mouseup", () => {
-    isDraggingSplit = false;
-  });
-
-  // 5. Hover Depth Probing & Point Selection
+  // 4. Hover Depth Probing & Point Selection
   function handleProbeHover(relX, relY, showCrosshairs = true) {
-    if (!currentData || activeTab === "3d") return;
+    if (!currentData) return;
 
     const grid = currentData.probe_grid;
     const rows = grid.length;
@@ -369,7 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function handlePointSelection(relX, relY) {
-    if (!currentData || activeTab === "3d" || isDraggingSplit) return;
+    if (!currentData) return;
 
     const grid = currentData.probe_grid;
     const rows = grid.length;
@@ -411,16 +334,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const relY = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
       handlePointSelection(relX, relY);
     });
-
-    splitViewport.addEventListener("mouseleave", handleProbeLeave);
   }
 
   attachBoxListeners(boxRgb);
   attachBoxListeners(boxDepth);
 
   function renderPins() {
-    const allPinA = [pinARgb, pinADepth, pinASplit].filter(Boolean);
-    const allPinB = [pinBRgb, pinBDepth, pinBSplit].filter(Boolean);
+    const allPinA = [pinARgb, pinADepth].filter(Boolean);
+    const allPinB = [pinBRgb, pinBDepth].filter(Boolean);
 
     if (points.length >= 1) {
       allPinA.forEach((p) => {
@@ -484,61 +405,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
   }
 
-  // 6. View Tabs
-  function setTab(tab) {
-    activeTab = tab;
-    [tabSide, tabSplit, tabDepth, tabRgb, tab3d].filter(Boolean).forEach((t) => t.classList.remove("active"));
-
-    if (tab === "side") {
-      if (tabSide) tabSide.classList.add("active");
-      if (dualGrid) dualGrid.style.display = "grid";
-      if (splitViewport) splitViewport.style.display = "none";
-      if (threejsContainer) threejsContainer.style.display = "none";
-      if (probeReadout) probeReadout.style.display = "flex";
-    } else if (tab === "split") {
-      if (tabSplit) tabSplit.classList.add("active");
-      if (dualGrid) dualGrid.style.display = "none";
-      if (splitViewport) splitViewport.style.display = "block";
-      if (splitClip) splitClip.style.display = "block";
-      if (splitHandle) splitHandle.style.display = "block";
-      if (threejsContainer) threejsContainer.style.display = "none";
-      if (probeReadout) probeReadout.style.display = "flex";
-      setSplitPosition(50);
-    } else if (tab === "depth") {
-      if (tabDepth) tabDepth.classList.add("active");
-      if (dualGrid) dualGrid.style.display = "none";
-      if (splitViewport) splitViewport.style.display = "block";
-      if (splitClip) splitClip.style.display = "block";
-      if (splitHandle) splitHandle.style.display = "none";
-      if (threejsContainer) threejsContainer.style.display = "none";
-      if (probeReadout) probeReadout.style.display = "flex";
-      setSplitPosition(100);
-    } else if (tab === "rgb") {
-      if (tabRgb) tabRgb.classList.add("active");
-      if (dualGrid) dualGrid.style.display = "none";
-      if (splitViewport) splitViewport.style.display = "block";
-      if (splitClip) splitClip.style.display = "block";
-      if (splitHandle) splitHandle.style.display = "none";
-      if (threejsContainer) threejsContainer.style.display = "none";
-      if (probeReadout) probeReadout.style.display = "flex";
-      setSplitPosition(0);
-    } else if (tab === "3d") {
-      if (tab3d) tab3d.classList.add("active");
-      if (dualGrid) dualGrid.style.display = "none";
-      if (splitViewport) splitViewport.style.display = "none";
-      if (threejsContainer) threejsContainer.style.display = "block";
-      if (probeReadout) probeReadout.style.display = "none";
-      initOrUpdate3D();
-    }
-  }
-
-  if (tabSide) tabSide.addEventListener("click", () => setTab("side"));
-  if (tabSplit) tabSplit.addEventListener("click", () => setTab("split"));
-  if (tabDepth) tabDepth.addEventListener("click", () => setTab("depth"));
-  if (tabRgb) tabRgb.addEventListener("click", () => setTab("rgb"));
-  if (tab3d) tab3d.addEventListener("click", () => setTab("3d"));
-
-  // 7. Model & Palette Controls
+  // 6. Model & Palette Controls
   if (modelSelect) modelSelect.addEventListener("change", loadPrediction);
   if (colormapSelect) {
     colormapSelect.addEventListener("change", () => {
@@ -581,92 +448,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // 9. Interactive Three.js 3D Surface / Point Cloud View
-  function initOrUpdate3D() {
-    if (!currentData) return;
-
-    const width = threejsContainer.clientWidth || 800;
-    const height = threejsContainer.clientHeight || 500;
-
-    if (!scene) {
-      scene = new THREE.Scene();
-      scene.background = new THREE.Color(0xf8fafc);
-
-      camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 100);
-      camera.position.set(0, -1.8, 2.2);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(width, height);
-      renderer.setPixelRatio(window.devicePixelRatio);
-      threejsContainer.appendChild(renderer.domElement);
-
-      controls = new THREE.OrbitControls(camera, renderer.domElement);
-      controls.enableDamping = true;
-      controls.dampingFactor = 0.05;
-
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
-      scene.add(ambientLight);
-
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
-      dirLight.position.set(1, 2, 3);
-      scene.add(dirLight);
-
-      function animate() {
-        requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
-      }
-      animate();
-
-      window.addEventListener("resize", () => {
-        if (renderer && camera && threejsContainer.style.display !== "none") {
-          const w = threejsContainer.clientWidth || 800;
-          const h = threejsContainer.clientHeight || 500;
-          camera.aspect = w / h;
-          camera.updateProjectionMatrix();
-          renderer.setSize(w, h);
-        }
-      });
-    }
-
-    // Fetch 3D point cloud from backend
-    const formData = new FormData();
-    if (currentFile) {
-      formData.append("file", currentFile);
-    } else {
-      formData.append("sample_id", currentSampleId);
-    }
-
-    fetch("/api/mesh-3d", {
-      method: "POST",
-      body: formData,
-    })
-      .then((r) => r.json())
-      .then((meshData) => {
-        if (mesh3d) {
-          scene.remove(mesh3d);
-          mesh3d.geometry.dispose();
-          mesh3d.material.dispose();
-        }
-
-        const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute("position", new THREE.Float32BufferAttribute(meshData.positions, 3));
-        geometry.setAttribute("color", new THREE.Float32BufferAttribute(meshData.colors, 3));
-
-        const material = new THREE.PointsMaterial({
-          size: 0.035,
-          vertexColors: true,
-          sizeAttenuation: true,
-        });
-
-        mesh3d = new THREE.Points(geometry, material);
-        mesh3d.rotation.x = -Math.PI / 4; // subtle tilt for natural perspective
-        scene.add(mesh3d);
-      })
-      .catch((err) => console.error("3D Mesh error:", err));
-  }
-
-  // 12. Code Walkthrough Tabs & Copy Functionality
+  // 9. Code Walkthrough Tabs & Copy Functionality
   const codeTabBtns = document.querySelectorAll(".code-tab-btn");
   const codeTabPanels = document.querySelectorAll(".code-tab-panel");
 

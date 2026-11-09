@@ -182,6 +182,20 @@ body {
   flex-direction: column;
 }
 
+.viewer-view-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.38rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  letter-spacing: -0.01em;
+}
+
 .tab-nav {
   display: flex;
   gap: 0.35rem;
@@ -1349,6 +1363,39 @@ body {
   color: var(--text-secondary);
   line-height: 1.55;
   margin-bottom: 0.65rem;
+}
+
+.explainer-bullet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.6rem;
+  margin: 0.75rem 0 0.85rem 0;
+}
+
+.bullet-card {
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem 0.75rem;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.bullet-card strong {
+  color: var(--text-primary);
+  display: block;
+  font-size: 0.78rem;
+  margin-bottom: 0.2rem;
+}
+
+.bullet-card code {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  background: var(--bg-tertiary);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+  color: var(--accent-blue);
 }
 
 .math-callout {
