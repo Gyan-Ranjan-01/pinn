@@ -7,3 +7,4 @@ services:
     dockerfilePath: Dockerfile
     healthCheckPath: /health
     autoDeploy: true
+
