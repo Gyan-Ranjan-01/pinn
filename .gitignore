@@ -13,6 +13,5 @@ scratch/
 pdf_page_*.png
 pdf_text.txt
 *.egg-info/
-
-
+docs/
 
