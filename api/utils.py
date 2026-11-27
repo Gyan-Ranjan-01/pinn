@@ -16,7 +16,8 @@ def numpy_to_base64_png(array_rgb: np.ndarray) -> str:
     """
     pil_img = Image.fromarray(array_rgb)
     buf = io.BytesIO()
-    pil_img.save(buf, format="PNG", optimize=True)
+    # compress_level=1 avoids expensive zlib brute-forcing on throttled CPUs
+    pil_img.save(buf, format="PNG", compress_level=1)
     b64_str = base64.b64encode(buf.getvalue()).decode("utf-8")
     return f"data:image/png;base64,{b64_str}"
 

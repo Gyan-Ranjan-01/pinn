@@ -3,12 +3,12 @@ Inference Engine and Visualization Utilities for Relative Depth Estimation.
 """
 
 from typing import Tuple, Dict, Any, Optional, List
+import gc
 import io
 import os
 import numpy as np
 import cv2
 from PIL import Image
-import matplotlib.cm as cm
 import torch
 
 from .models.pinn_net import PINNDepthNet
@@ -100,7 +100,8 @@ def colorize_depth_map(
 class DepthInferenceEngine:
     """
     High-performance inference engine for Relative Depth Estimation.
-    Supports both High-Precision Vision-Transformer PINN model and custom ResNet-18 PINN.
+    Supports both High-Precision Vision-Transformer/MiDaS PINN and custom ResNet-18 PINN,
+    with automatic low-memory mode for constrained hosts (e.g. Render 512 MB Free Tier).
     """
 
     def __init__(
@@ -110,45 +111,102 @@ class DepthInferenceEngine:
         backbone: str = "resnet18",
         is_physics_informed: bool = True,
         device: Optional[str] = None,
+        low_memory: Optional[bool] = None,
+        preload: bool = True,
+        max_image_dim: Optional[int] = None,
     ):
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
 
+        if low_memory is None:
+            low_memory = (
+                os.environ.get("LOW_MEMORY_MODE", "").lower() in ("1", "true", "yes")
+                or bool(os.environ.get("RENDER"))
+            )
+        self.low_memory = low_memory
+        self.checkpoint_path = checkpoint_path
+        self.backbone = backbone
+        self.is_physics_informed = is_physics_informed
         self.model_type = model_type
+        self.max_image_dim = max_image_dim or (960 if self.low_memory else 1280)
+
+        if self.low_memory:
+            # Avoid OpenMP/PyTorch thread arena overhead on 0.1-vCPU containers
+            torch.set_num_threads(1)
+
         self.hp_model = None
         self.hp_transforms = None
+        self.model = None
 
-        if model_type == "high_precision":
+        if preload:
+            if model_type == "high_precision":
+                self._ensure_hp_model()
+                if not self.low_memory:
+                    self._ensure_custom_model()
+            else:
+                self._ensure_custom_model()
+
+    def _release_inactive_models(self, keep: str) -> None:
+        """Frees inactive model weights in low-memory environments to stay below 512 MB RAM."""
+        if not self.low_memory:
+            return
+        if keep != "high_precision" and self.hp_model is not None:
+            self.hp_model = None
+            self.hp_transforms = None
+            gc.collect()
+        if keep != "custom_pinn" and self.model is not None:
+            self.model = None
+            gc.collect()
+
+    def _ensure_hp_model(self) -> bool:
+        """Lazily loads MiDaS_small (low-memory) or DPT_Hybrid with graceful fallback."""
+        if self.hp_model is not None:
+            return True
+
+        self._release_inactive_models(keep="high_precision")
+        hub_candidates = (
+            [("MiDaS_small", "small_transform")]
+            if self.low_memory
+            else [("DPT_Hybrid", "dpt_transform"), ("MiDaS_small", "small_transform")]
+        )
+        for model_name, tf_name in hub_candidates:
             try:
-                # DPT-Hybrid (Dense Prediction Transformer + ResNet-50) for fine object separation
-                self.hp_model = torch.hub.load("intel-isl/MiDaS", "DPT_Hybrid", trust_repo=True).eval().to(self.device)
-                self.hp_transforms = torch.hub.load("intel-isl/MiDaS", "transforms").dpt_transform
+                self.hp_model = (
+                    torch.hub.load("intel-isl/MiDaS", model_name, trust_repo=True)
+                    .eval()
+                    .to(self.device)
+                )
+                transforms = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True)
+                self.hp_transforms = getattr(transforms, tf_name)
+                return True
             except Exception as e:
-                print(f"Notice: Loading MiDaS_small fallback ({e}).")
-                try:
-                    self.hp_model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True).eval().to(self.device)
-                    self.hp_transforms = torch.hub.load("intel-isl/MiDaS", "transforms").small_transform
-                except Exception as e2:
-                    print(f"Warning: Falling back to custom PINN ({e2}).")
-                    self.model_type = "custom_pinn"
+                print(f"Notice: Could not load {model_name} ({e}).")
 
-        # Initialize custom PINN model
+        print("Warning: Falling back to custom PINN.")
+        return False
+
+    def _ensure_custom_model(self) -> PINNDepthNet:
+        """Lazily instantiates PINNDepthNet and loads checkpoint weights if present."""
+        if self.model is not None:
+            return self.model
+
+        self._release_inactive_models(keep="custom_pinn")
+        has_ckpt = bool(self.checkpoint_path and os.path.exists(str(self.checkpoint_path)))
         self.model = PINNDepthNet(
-            backbone=backbone,
-            pretrained=(checkpoint_path is None or not os.path.exists(str(checkpoint_path))),
-            is_physics_informed=is_physics_informed,
+            backbone=self.backbone,
+            pretrained=not has_ckpt,
+            is_physics_informed=self.is_physics_informed,
         ).to(self.device)
 
-        if checkpoint_path and os.path.exists(checkpoint_path):
-            state = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-            if "model_state_dict" in state:
-                self.model.load_state_dict(state["model_state_dict"], strict=False)
-            else:
-                self.model.load_state_dict(state, strict=False)
+        if has_ckpt:
+            state = torch.load(self.checkpoint_path, map_location=self.device, weights_only=False)
+            state_dict = state["model_state_dict"] if "model_state_dict" in state else state
+            self.model.load_state_dict(state_dict, strict=False)
 
         self.model.eval()
+        return self.model
 
     def predict(
         self,
@@ -194,13 +252,19 @@ class DepthInferenceEngine:
             orig_pil = image_input.convert("RGB")
 
         orig_w, orig_h = orig_pil.size
+        if max(orig_w, orig_h) > self.max_image_dim:
+            scale = self.max_image_dim / max(orig_w, orig_h)
+            orig_w = max(1, int(round(orig_w * scale)))
+            orig_h = max(1, int(round(orig_h * scale)))
+            orig_pil = orig_pil.resize((orig_w, orig_h), Image.Resampling.BILINEAR)
+
         img_np_orig = np.array(orig_pil)
 
         # 1. High-Precision Transformer/CNN Physics-Guided Pipeline
-        if active_type == "high_precision" and self.hp_model is not None:
+        if active_type == "high_precision" and self._ensure_hp_model():
             input_batch = self.hp_transforms(img_np_orig).to(self.device)
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 pred = self.hp_model(input_batch)
                 # Interpolate back to original resolution with bicubic filtering
                 pred = torch.nn.functional.interpolate(
@@ -223,14 +287,16 @@ class DepthInferenceEngine:
 
         # 2. Custom ResNet-18 PINN CNN Pipeline
         else:
+            active_type = "custom_pinn"
+            custom_model = self._ensure_custom_model()
             proc_h, proc_w = target_size if target_size else (320, 512)
             resized_pil = orig_pil.resize((proc_w, proc_h), Image.Resampling.BILINEAR)
 
             img_np = np.array(resized_pil, dtype=np.float32) / 255.0
             tensor_in = torch.from_numpy(img_np.transpose((2, 0, 1))).unsqueeze(0).to(self.device)
 
-            with torch.no_grad():
-                output = self.model(tensor_in)
+            with torch.inference_mode():
+                output = custom_model(tensor_in)
                 depth_tensor = output["depth"]
                 depth_raw = depth_tensor.squeeze().cpu().numpy()
 
@@ -277,6 +343,7 @@ class DepthInferenceEngine:
         result: Dict[str, Any] = {
             "depth_map": depth_orig,
             "colorized_depth": colorized_rgb,
+            "input_rgb": img_np_orig,
             "min_depth": float(np.min(depth_orig)),
             "max_depth": float(np.max(depth_orig)),
             "mean_depth": float(np.mean(depth_orig)),
@@ -349,11 +416,12 @@ class DepthInferenceEngine:
         """
         Exports the model to ONNX for lightweight CPU deployment (e.g. Hugging Face / Vercel / Railway).
         """
+        model = self._ensure_custom_model()
         dummy_input = torch.randn(1, 3, input_size[0], input_size[1], device=self.device)
-        self.model.eval()
+        model.eval()
 
         torch.onnx.export(
-            self.model,
+            model,
             dummy_input,
             output_path,
             input_names=["image"],

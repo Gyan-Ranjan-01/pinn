@@ -2,6 +2,14 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+# Keep container memory footprint low & prevent thread-arena oversubscription on 0.1-vCPU hosts
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    OMP_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1 \
+    TORCH_NUM_THREADS=1
+
 # Upgrade pip and install lightweight CPU PyTorch
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu

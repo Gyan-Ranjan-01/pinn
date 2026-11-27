@@ -8,3 +8,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
+    envVars:
+      - key: LOW_MEMORY_MODE
+        value: "1"
+      - key: TORCH_HOME
+        value: /tmp/torch_cache

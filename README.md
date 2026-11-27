@@ -1,16 +1,4 @@
----
-title: PINN Relative Depth Estimation
-emoji: 🌊
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # PINN-Depth: Physics-Informed Relative Monocular Depth Estimation
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Gyan-Ranjan-01/pinn)
 
 **PINN-Depth** is a Physics-Informed Neural Network (PINN) for **single-image (monocular) relative depth estimation** in outdoor scenes. It embeds the physical laws of **atmospheric light scattering** directly into the network forward pass, training augmentations, loss functions, and post-processing pipeline.
 

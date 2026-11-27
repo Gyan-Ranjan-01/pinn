@@ -5,10 +5,9 @@ Physics of Outdoor Atmospheric Scattering based on:
     Proceedings of the Eighth Indian Conference on Computer Vision, Graphics and Image Processing (ICVGIP '12), ACM.
 """
 
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 import numpy as np
 import cv2
-from matplotlib.colors import LinearSegmentedColormap
 import torch
 
 
@@ -94,7 +93,59 @@ def fast_guided_filter(
     return np.clip(q, 0.0, 1.0)
 
 
-def get_das_paper_colormap() -> LinearSegmentedColormap:
+_DAS_COLORS = [
+    (1.0, 1.0, 0.0),    # 0.00: Bright Yellow (Nearest, foreground)
+    (1.0, 0.55, 0.0),   # 0.20: Orange / Gold
+    (0.85, 0.1, 0.25),  # 0.45: Crimson / Magenta
+    (0.15, 0.35, 0.9),  # 0.70: Royal Blue
+    (0.06, 0.08, 0.3),  # 0.85: Deep Indigo
+    (0.0, 0.0, 0.02),   # 1.00: Dark Black (Farthest, sky)
+]
+
+_DISTINCT_COLORS = [
+    (1.0, 1.0, 0.0),    # 0.00: Radiant Yellow (Immediate foreground)
+    (1.0, 0.60, 0.0),   # 0.15: Warm Amber
+    (0.95, 0.18, 0.12), # 0.30: Coral Red
+    (0.85, 0.10, 0.55), # 0.45: Magenta / Crimson
+    (0.45, 0.15, 0.85), # 0.60: Violet
+    (0.12, 0.50, 0.95), # 0.75: Azure Blue
+    (0.05, 0.18, 0.55), # 0.90: Deep Navy
+    (0.00, 0.00, 0.02), # 1.00: Dark Black (Sky / Horizon)
+]
+
+_IRONBOW_COLORS = [
+    (1.0, 1.0, 1.0),    # 0.00: White-Hot
+    (1.0, 0.95, 0.40),  # 0.08: Pale Yellow
+    (1.0, 0.70, 0.00),  # 0.20: Golden Amber
+    (0.95, 0.28, 0.05), # 0.38: Flame Orange
+    (0.75, 0.05, 0.35), # 0.55: Crimson Magenta
+    (0.35, 0.05, 0.55), # 0.72: Deep Purple
+    (0.08, 0.12, 0.40), # 0.88: Midnight Blue
+    (0.01, 0.01, 0.03), # 1.00: Deep Black
+]
+
+_RAINBOW_COLORS = [
+    (1.0, 1.0, 1.0),    # 0.00: White-Hot
+    (1.0, 0.15, 0.15),  # 0.15: Crimson Red
+    (1.0, 0.60, 0.00),  # 0.30: Flame Orange
+    (1.0, 0.95, 0.00),  # 0.45: Yellow
+    (0.1, 0.85, 0.20),  # 0.60: Neon Green
+    (0.0, 0.75, 1.00),  # 0.75: Cyan
+    (0.1, 0.15, 0.85),  # 0.90: Royal Blue
+    (0.0, 0.00, 0.02),  # 1.00: Pitch Black
+]
+
+
+def _build_rgb_lut(colors: List[Tuple[float, float, float]], n: int = 256) -> np.ndarray:
+    """Builds a 256-entry uint8 RGB lookup table via linear interpolation without importing matplotlib."""
+    stops = np.linspace(0.0, 1.0, len(colors))
+    query = np.linspace(0.0, 1.0, n)
+    arr = np.asarray(colors, dtype=np.float32)
+    lut = np.stack([np.interp(query, stops, arr[:, c]) for c in range(3)], axis=1)
+    return np.clip(lut * 255.0, 0.0, 255.0).astype(np.uint8)
+
+
+def get_das_paper_colormap():
     """
     Exact colormap from Das et al. (ICVGIP 2012) Figures 3, 7, 9, 10, 11:
         - 0.0 (Nearest to viewer): Bright Yellow (#FFFF00)
@@ -104,43 +155,25 @@ def get_das_paper_colormap() -> LinearSegmentedColormap:
         - 0.85: Deep Indigo (#1E1B4B)
         - 1.00 (Farthest / Sky): Dark Black (#000000)
     """
-    colors = [
-        (1.0, 1.0, 0.0),    # 0.00: Bright Yellow (Nearest, foreground)
-        (1.0, 0.55, 0.0),   # 0.20: Orange / Gold
-        (0.85, 0.1, 0.25),  # 0.45: Crimson / Magenta
-        (0.15, 0.35, 0.9),  # 0.70: Royal Blue
-        (0.06, 0.08, 0.3),  # 0.85: Deep Indigo
-        (0.0, 0.0, 0.02),   # 1.00: Dark Black (Farthest, sky)
-    ]
-    return LinearSegmentedColormap.from_list("das_icvgip", colors, N=256)
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list("das_icvgip", _DAS_COLORS, N=256)
 
 
-# Precompute 256-color lookup table for fast RGB mapping
-_DAS_CMAP = get_das_paper_colormap()
-DAS_LUT_RGB = (_DAS_CMAP(np.linspace(0.0, 1.0, 256))[:, :3] * 255.0).astype(np.uint8)
+# Precompute 256-color lookup tables using pure NumPy to keep runtime memory low
+DAS_LUT_RGB = _build_rgb_lut(_DAS_COLORS)
 
 
-def get_distinct_colormap() -> LinearSegmentedColormap:
+def get_distinct_colormap():
     """
     High-Distinction Multi-Hue Colormap for fine-grained object delineation:
     Transitions across distinct perceptual color bands so adjacent items
     at slightly different depths are immediately recognizable.
     """
-    colors = [
-        (1.0, 1.0, 0.0),    # 0.00: Radiant Yellow (Immediate foreground)
-        (1.0, 0.60, 0.0),   # 0.15: Warm Amber
-        (0.95, 0.18, 0.12), # 0.30: Coral Red
-        (0.85, 0.10, 0.55), # 0.45: Magenta / Crimson
-        (0.45, 0.15, 0.85), # 0.60: Violet
-        (0.12, 0.50, 0.95), # 0.75: Azure Blue
-        (0.05, 0.18, 0.55), # 0.90: Deep Navy
-        (0.00, 0.00, 0.02), # 1.00: Dark Black (Sky / Horizon)
-    ]
-    return LinearSegmentedColormap.from_list("distinct", colors, N=256)
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list("distinct", _DISTINCT_COLORS, N=256)
 
 
-_DISTINCT_CMAP = get_distinct_colormap()
-DISTINCT_LUT_RGB = (_DISTINCT_CMAP(np.linspace(0.0, 1.0, 256))[:, :3] * 255.0).astype(np.uint8)
+DISTINCT_LUT_RGB = _build_rgb_lut(_DISTINCT_COLORS)
 
 
 def colorize_das_paper(depth_norm: np.ndarray) -> np.ndarray:
@@ -160,7 +193,7 @@ def colorize_distinct(depth_norm: np.ndarray) -> np.ndarray:
     return DISTINCT_LUT_RGB[d_idx]
 
 
-def get_flir_ironbow_colormap() -> LinearSegmentedColormap:
+def get_flir_ironbow_colormap():
     """
     Iconic FLIR Thermal Ironbow Colormap:
     - 0.00: White-Hot (#FFFFFF) (Closest, hottest thermal signature)
@@ -172,42 +205,21 @@ def get_flir_ironbow_colormap() -> LinearSegmentedColormap:
     - 0.88: Midnight Blue (#1E1B4B)
     - 1.00: Deep Black (#020617) (Farthest / Coldest / Sky)
     """
-    colors = [
-        (1.0, 1.0, 1.0),    # 0.00: White-Hot
-        (1.0, 0.95, 0.40),  # 0.08: Pale Yellow
-        (1.0, 0.70, 0.00),  # 0.20: Golden Amber
-        (0.95, 0.28, 0.05), # 0.38: Flame Orange
-        (0.75, 0.05, 0.35), # 0.55: Crimson Magenta
-        (0.35, 0.05, 0.55), # 0.72: Deep Purple
-        (0.08, 0.12, 0.40), # 0.88: Midnight Blue
-        (0.01, 0.01, 0.03), # 1.00: Deep Black
-    ]
-    return LinearSegmentedColormap.from_list("flir_ironbow", colors, N=256)
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list("flir_ironbow", _IRONBOW_COLORS, N=256)
 
 
-def get_flir_rainbow_colormap() -> LinearSegmentedColormap:
+def get_flir_rainbow_colormap():
     """
     FLIR Rainbow High-Contrast Thermal Colormap:
     White -> Crimson Red -> Flame Orange -> Yellow -> Neon Green -> Cyan -> Royal Blue -> Pitch Black
     """
-    colors = [
-        (1.0, 1.0, 1.0),    # 0.00: White-Hot
-        (1.0, 0.15, 0.15),  # 0.15: Crimson Red
-        (1.0, 0.60, 0.00),  # 0.30: Flame Orange
-        (1.0, 0.95, 0.00),  # 0.45: Yellow
-        (0.1, 0.85, 0.20),  # 0.60: Neon Green
-        (0.0, 0.75, 1.00),  # 0.75: Cyan
-        (0.1, 0.15, 0.85),  # 0.90: Royal Blue
-        (0.0, 0.00, 0.02),  # 1.00: Pitch Black
-    ]
-    return LinearSegmentedColormap.from_list("flir_rainbow", colors, N=256)
+    from matplotlib.colors import LinearSegmentedColormap
+    return LinearSegmentedColormap.from_list("flir_rainbow", _RAINBOW_COLORS, N=256)
 
 
-_IRONBOW_CMAP = get_flir_ironbow_colormap()
-IRONBOW_LUT_RGB = (_IRONBOW_CMAP(np.linspace(0.0, 1.0, 256))[:, :3] * 255.0).astype(np.uint8)
-
-_RAINBOW_CMAP = get_flir_rainbow_colormap()
-RAINBOW_LUT_RGB = (_RAINBOW_CMAP(np.linspace(0.0, 1.0, 256))[:, :3] * 255.0).astype(np.uint8)
+IRONBOW_LUT_RGB = _build_rgb_lut(_IRONBOW_COLORS)
+RAINBOW_LUT_RGB = _build_rgb_lut(_RAINBOW_COLORS)
 
 
 def colorize_flir_ironbow(depth_norm: np.ndarray) -> np.ndarray:

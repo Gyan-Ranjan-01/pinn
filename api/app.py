@@ -15,6 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from pinn_depth.inference import DepthInferenceEngine, colorize_depth_map
 from api.utils import numpy_to_base64_png, depth_to_point_cloud_json
@@ -52,10 +53,16 @@ def get_engine() -> DepthInferenceEngine:
         ckpt_path = os.path.join("checkpoints", "best_pinn_model.pt")
         if not os.path.exists(ckpt_path):
             ckpt_path = None
+        is_low_mem = (
+            os.environ.get("LOW_MEMORY_MODE", "").lower() in ("1", "true", "yes")
+            or bool(os.environ.get("RENDER"))
+        )
         engine = DepthInferenceEngine(
             checkpoint_path=ckpt_path,
             backbone="resnet18",
             is_physics_informed=True,
+            low_memory=is_low_mem,
+            preload=not is_low_mem,
         )
     return engine
 
@@ -72,11 +79,14 @@ class ComparePointsRequest(BaseModel):
 @app.get("/health")
 def health_check():
     eng = get_engine()
+    backbone = eng.model.backbone_name if eng.model is not None else eng.backbone
+    is_pinn = eng.model.is_physics_informed if eng.model is not None else eng.is_physics_informed
     return {
         "status": "healthy",
         "device": str(eng.device),
-        "backbone": eng.model.backbone_name,
-        "is_physics_informed": eng.model.is_physics_informed,
+        "backbone": backbone,
+        "is_physics_informed": is_pinn,
+        "low_memory": eng.low_memory,
     }
 
 
@@ -134,9 +144,9 @@ async def predict_depth(
         else:
             raise HTTPException(status_code=400, detail="Must provide an image file or sample_id.")
 
-        orig_w, orig_h = pil_image.size
-        # Run inference
-        result = eng.predict(
+        # Run CPU-bound inference in threadpool so /health remains responsive
+        result = await run_in_threadpool(
+            eng.predict,
             pil_image,
             colormap=colormap,
             invert=invert,
@@ -150,24 +160,26 @@ async def predict_depth(
 
         depth_map = result["depth_map"]
         colorized_rgb = result["colorized_depth"]
+        orig_rgb = result.get("input_rgb", np.array(pil_image))
+        out_w, out_h = result.get("image_size", list(pil_image.size))
 
-        # Downsample depth grid to 64x64 for fast interactive hover probing on client
+        # Downsample depth grid to 64x48 for fast interactive hover probing on client
         probe_grid = cv2.resize(depth_map, (64, 48), interpolation=cv2.INTER_AREA).tolist()
 
         # Encode RGB images to Base64
         depth_b64 = numpy_to_base64_png(colorized_rgb)
-        orig_b64 = numpy_to_base64_png(np.array(pil_image))
+        orig_b64 = numpy_to_base64_png(orig_rgb)
 
-        # Transmission visualization
+        # Skip redundant transmission PNG encoding in low-memory mode
         trans_b64 = None
-        if "transmission_map" in result:
+        if not eng.low_memory and "transmission_map" in result:
             trans_vis = (result["transmission_map"] * 255.0).astype(np.uint8)
             trans_rgb = np.repeat(trans_vis[:, :, np.newaxis], 3, axis=2)
             trans_b64 = numpy_to_base64_png(trans_rgb)
 
         return {
             "status": "success",
-            "image_size": [orig_w, orig_h],
+            "image_size": [out_w, out_h],
             "original_image": orig_b64,
             "depth_map_png": depth_b64,
             "transmission_png": trans_b64,
