@@ -3,6 +3,7 @@ services:
     name: pinn-depth
     runtime: docker
     plan: free
+    numInstances: 1
     region: oregon
     dockerfilePath: ./Dockerfile
     dockerContext: .
